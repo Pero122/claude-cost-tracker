@@ -435,12 +435,19 @@ export function parseSessionFile(file: SessionFile, initialEffort?: string | nul
   const content = fs.readFileSync(file.jsonlPath, 'utf-8')
   const parsed = parseJsonlContent(content, file.sessionId, initialEffort)
 
+  // Collect main session message UUIDs for dedup against sub-agents
+  const mainUuids = new Set(parsed.messages.map(m => m.uuid))
+
   // Parse sub-agents
   const subAgents: ParsedSubAgent[] = []
 
   for (const sa of file.subAgentFiles) {
     const saContent = fs.readFileSync(sa.jsonlPath, 'utf-8')
     const saParsed = parseJsonlContent(saContent, sa.subAgentId)
+
+    // Filter out messages that already exist in the main session (e.g. aside_question mirrors)
+    const uniqueMessages = saParsed.messages.filter(m => !mainUuids.has(m.uuid))
+    if (uniqueMessages.length === 0) continue
 
     let agentType: string | null = null
     if (sa.metaJsonPath) {
@@ -456,7 +463,7 @@ export function parseSessionFile(file: SessionFile, initialEffort?: string | nul
       id: sa.subAgentId,
       parentSessionId: file.sessionId,
       agentType,
-      messages: saParsed.messages,
+      messages: uniqueMessages,
     })
   }
 
