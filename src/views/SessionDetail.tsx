@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import type { Session, SubAgent, Message } from '../lib/types'
 import { navigate } from '../lib/router'
 import { formatDuration, formatTokens, formatCost, formatCostShort, shortenPath } from '../lib/format'
@@ -78,6 +78,22 @@ function buildAgentOrdinalMap(messages: Message[], subAgents: SubAgent[]): Map<s
   }
 
   return map
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [text])
+  return (
+    <button className="copy-btn" onClick={handleCopy} title="Copy to clipboard">
+      {copied ? 'Copied!' : 'Copy'}
+    </button>
+  )
 }
 
 interface MessageTableProps {
@@ -219,7 +235,12 @@ function MessageTable({ messages, convertCurrency, currencySymbol, show5mCache, 
               <td title={isExpanded ? undefined : msg.preview} style={{ maxWidth: '400px' }}>
                 {isExpanded ? (
                   <div className="expanded-content">
-                    {msg.fullText && <div className="expanded-text">{msg.fullText}</div>}
+                    {msg.fullText && (
+                      <div className="expanded-text-wrapper">
+                        <CopyButton text={msg.fullText} />
+                        <div className="expanded-text">{msg.fullText}</div>
+                      </div>
+                    )}
                     {msg.toolResults.length > 0 && (
                       <div className="expanded-tools">
                         {msg.toolResults.map((tr, tri) => (
@@ -229,7 +250,12 @@ function MessageTable({ messages, convertCurrency, currencySymbol, show5mCache, 
                               {tr.isError && <span style={{ color: 'var(--red)', marginLeft: 4 }}>ERROR</span>}
                               {tr.toolInput && <span className="expanded-tool-input">{tr.toolInput}</span>}
                             </div>
-                            {tr.fullResult && <pre className="expanded-text">{tr.fullResult}</pre>}
+                            {tr.fullResult && (
+                              <div className="expanded-text-wrapper">
+                                <CopyButton text={tr.fullResult} />
+                                <pre className="expanded-text">{tr.fullResult}</pre>
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
