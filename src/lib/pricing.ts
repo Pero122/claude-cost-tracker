@@ -10,6 +10,7 @@ interface ModelPricing {
 }
 
 const PRICING_TABLE: Record<string, ModelPricing> = {
+  'claude-opus-4-7':   { input: 5,    output: 25,   cacheWrite5m: 6.25,  cacheWrite1h: 10,   cacheRead: 0.5  },
   'claude-opus-4-6':   { input: 5,    output: 25,   cacheWrite5m: 6.25,  cacheWrite1h: 10,   cacheRead: 0.5  },
   'claude-opus-4-5':   { input: 5,    output: 25,   cacheWrite5m: 6.25,  cacheWrite1h: 10,   cacheRead: 0.5  },
   'claude-opus-4-1':   { input: 15,   output: 75,   cacheWrite5m: 18.75, cacheWrite1h: 30,   cacheRead: 1.5  },
@@ -24,6 +25,7 @@ const PRICING_TABLE: Record<string, ModelPricing> = {
 
 // 1M context premium rates: 2x input, 1.5x output, 2x cache rates
 const PREMIUM_PRICING_TABLE: Record<string, ModelPricing> = {
+  'claude-opus-4-7':   { input: 10,   output: 37.50, cacheWrite5m: 12.50, cacheWrite1h: 20,   cacheRead: 1.0  },
   'claude-opus-4-6':   { input: 10,   output: 37.50, cacheWrite5m: 12.50, cacheWrite1h: 20,   cacheRead: 1.0  },
   'claude-sonnet-4-6': { input: 6,    output: 22.50, cacheWrite5m: 7.50,  cacheWrite1h: 12,   cacheRead: 0.6  },
   'claude-sonnet-4-5': { input: 6,    output: 22.50, cacheWrite5m: 7.50,  cacheWrite1h: 12,   cacheRead: 0.6  },
@@ -32,7 +34,7 @@ const PREMIUM_PRICING_TABLE: Record<string, ModelPricing> = {
 
 // Models where premium was removed at GA (2026-03-13)
 const GA_DATE = '2026-03-13'
-const GA_MODELS = new Set(['claude-opus-4-6', 'claude-sonnet-4-6'])
+const GA_MODELS = new Set(['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6'])
 // Models that still have 1M premium (still in beta)
 const BETA_1M_MODELS = new Set(['claude-sonnet-4-5', 'claude-sonnet-4'])
 
@@ -51,22 +53,27 @@ interface CostInput {
   webSearchRequests: number
 }
 
+function normalizeModelId(model: string): string {
+  return model.replace(/-\d{8}$/, '')
+}
+
 export function getPricing(model: string, timestamp: string, totalInputTokens: number): ModelPricing | null {
-  const standard = PRICING_TABLE[model]
+  const normalized = normalizeModelId(model)
+  const standard = PRICING_TABLE[normalized] ?? PRICING_TABLE[model]
   if (!standard) return null
 
-  const premium = PREMIUM_PRICING_TABLE[model]
+  const premium = PREMIUM_PRICING_TABLE[normalized] ?? PREMIUM_PRICING_TABLE[model]
   if (!premium || totalInputTokens <= INPUT_THRESHOLD) return standard
 
   const dateStr = timestamp.slice(0, 10)
 
   // GA models: premium only before GA date
-  if (GA_MODELS.has(model)) {
+  if (GA_MODELS.has(normalized)) {
     return dateStr < GA_DATE ? premium : standard
   }
 
   // Beta 1M models: premium always applies above threshold
-  if (BETA_1M_MODELS.has(model)) {
+  if (BETA_1M_MODELS.has(normalized)) {
     return premium
   }
 

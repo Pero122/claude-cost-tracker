@@ -236,6 +236,36 @@ describe('calculateMessageCost', () => {
     // 50K * $10/M = $0.50 + 10K * $37.50/M = $0.375 + 160K * $1.0/M = $0.16 = $1.035
     expect(cost).toBeCloseTo(1.035, 3)
   })
+
+  it('normalizes dated model IDs to match pricing table', () => {
+    const cost = calculateMessageCost({
+      model: 'claude-haiku-4-5-20251001',
+      timestamp: '2026-03-15T10:00:00Z',
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
+      cacheReadTokens: 500_000,
+      webSearchRequests: 0,
+    })
+    // haiku-4-5: input $1 + output $5*0.1 + cacheRead $0.1*0.5 = $1 + $0.5 + $0.05 = $1.55
+    expect(cost).toBeCloseTo(1.55, 2)
+  })
+
+  it('calculates cost for opus-4-7', () => {
+    const cost = calculateMessageCost({
+      model: 'claude-opus-4-7',
+      timestamp: '2026-04-15T10:00:00Z',
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
+      cacheReadTokens: 0,
+      webSearchRequests: 0,
+    })
+    // input: $5 + output: $2.5 = $7.50
+    expect(cost).toBeCloseTo(7.50, 2)
+  })
 })
 
 describe('calculateSessionCosts', () => {
