@@ -211,7 +211,11 @@ function MessageTable({ messages, convertCurrency, currencySymbol, show5mCache, 
             >
               <td className="muted">{origIdx + 1}</td>
               <td className="muted">{formatTime(msg.timestamp)}</td>
-              <td>{msg.role}</td>
+              <td>
+                {msg.role}
+                {!isUser && msg.effort && <span className="effort-badge" title={`Effort: ${msg.effort}`}>{msg.effort}</span>}
+                {!isUser && msg.hasThinking && <span className="thinking-indicator" title="Extended thinking used">T</span>}
+              </td>
               <td title={isExpanded ? undefined : msg.preview} style={{ maxWidth: '400px' }}>
                 {isExpanded ? (
                   <div className="expanded-content">

@@ -187,6 +187,30 @@ tr:hover { background: var(--surface); }
 
 .user-row { opacity: 0.5; }
 
+/* Effort badge & thinking indicator */
+.effort-badge {
+  display: inline-block;
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--yellow);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  margin-left: 5px;
+  vertical-align: middle;
+  font-weight: 600;
+}
+.thinking-indicator {
+  display: inline-block;
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  margin-left: 3px;
+  vertical-align: middle;
+  font-weight: 600;
+}
+
 /* Expandable messages */
 .expandable-row { cursor: pointer; }
 .expandable-row:hover { background: rgba(88, 166, 255, 0.05); }

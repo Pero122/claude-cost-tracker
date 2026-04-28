@@ -4,7 +4,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 import os from 'os'
 import { fileURLToPath } from 'url'
-import { discoverSessionFiles, parseSessionFile } from './parser'
+import { discoverSessionFiles, parseSessionFile, scanEffortEvents } from './parser'
+import type { EffortEvent } from './parser'
 import type { ApiResponse } from '../src/lib/types'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -51,9 +52,41 @@ async function main() {
   app.get('/api/sessions', (_req, res) => {
     try {
       const files = discoverSessionFiles(dirs)
+
+      // Pre-scan all JSONL files to build a global effort timeline
+      const allEffortEvents: EffortEvent[] = []
+      for (const f of files) {
+        try {
+          const content = fs.readFileSync(f.jsonlPath, 'utf-8')
+          allEffortEvents.push(...scanEffortEvents(content, f.sessionId))
+        } catch { /* skip unreadable files */ }
+      }
+      allEffortEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+
+      // For cross-session lookup: find the persisted effort at a given time.
+      // "max" is session-only and doesn't carry over, so skip it.
+      function getEffortAtTime(timestamp: string): string | null {
+        let effort: string | null = null
+        for (const e of allEffortEvents) {
+          if (e.timestamp > timestamp) break
+          if (e.effort !== 'max') effort = e.effort
+        }
+        return effort
+      }
+
       const sessions = files.map(f => {
         try {
-          return parseSessionFile(f)
+          const content = fs.readFileSync(f.jsonlPath, 'utf-8')
+          let sessionStart: string | null = null
+          for (const line of content.split('\n')) {
+            if (!line.trim()) continue
+            try {
+              const ts = JSON.parse(line).timestamp
+              if (ts) { sessionStart = ts; break }
+            } catch { /* skip */ }
+          }
+          const initialEffort = sessionStart ? (getEffortAtTime(sessionStart) ?? 'medium') : 'medium'
+          return parseSessionFile(f, initialEffort)
         } catch (err) {
           console.error(`Error parsing ${f.jsonlPath}:`, err)
           return null

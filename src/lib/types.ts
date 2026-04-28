@@ -17,6 +17,8 @@ export interface ParsedMessage {
   fullText: string
   toolCalls: string[]
   toolResults: Array<{ name: string; toolInput: string; preview: string; fullResult: string; isError: boolean; agentId?: string }>
+  effort: string | null
+  hasThinking: boolean
 }
 
 export interface ParsedSubAgent {
