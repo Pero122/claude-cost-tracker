@@ -93,11 +93,42 @@ interface ParsedContent {
 
 // --- Public API ---
 
+export interface EffortEvent {
+  timestamp: string
+  effort: string
+  sessionId?: string
+}
+
+/**
+ * Lightweight scan of JSONL content to extract effort level change events.
+ */
+export function scanEffortEvents(content: string, sessionId?: string): EffortEvent[] {
+  const events: EffortEvent[] = []
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue
+    let entry: any
+    try { entry = JSON.parse(line) } catch { continue }
+    if (entry.type !== 'user') continue
+    const c = entry.message?.content
+    if (typeof c !== 'string') continue
+    const cmdMatch = c.match(/<command-name>\/effort<\/command-name>\s*<command-message>[^<]*<\/command-message>\s*<command-args>([^<]*)<\/command-args>/)
+    if (cmdMatch && cmdMatch[1].trim()) {
+      events.push({ timestamp: entry.timestamp, effort: cmdMatch[1].trim(), sessionId })
+      continue
+    }
+    const stdoutMatch = c.match(/<local-command-stdout>Set effort level to (\w+)/)
+    if (stdoutMatch) {
+      events.push({ timestamp: entry.timestamp, effort: stdoutMatch[1], sessionId })
+    }
+  }
+  return events
+}
+
 /**
  * Parse raw JSONL text into structured session data.
  * Handles deduplication of streaming chunks and extraction of cost-relevant fields.
  */
-export function parseJsonlContent(content: string, sessionId: string): ParsedContent {
+export function parseJsonlContent(content: string, sessionId: string, initialEffort?: string | null): ParsedContent {
   const lines = content.split('\n').filter(l => l.trim().length > 0)
 
   // First pass: collect entries
@@ -198,6 +229,7 @@ export function parseJsonlContent(content: string, sessionId: string): ParsedCon
   // Build ParsedMessages
   const messages: ParsedMessage[] = []
   const modelCounts = new Map<string, number>()
+  let currentEffort: string | null = initialEffort ?? null
 
   for (const item of merged) {
     if (item.kind === 'assistant') {
@@ -245,6 +277,9 @@ export function parseJsonlContent(content: string, sessionId: string): ParsedCon
       // Web search requests
       const webSearchRequests = usage.server_tool_use?.web_search_requests ?? 0
 
+      // Detect thinking blocks
+      const hasThinking = msg.content.some(b => b.type === 'thinking')
+
       messages.push({
         uuid: item.entry.uuid,
         timestamp: item.entry.timestamp,
@@ -260,11 +295,28 @@ export function parseJsonlContent(content: string, sessionId: string): ParsedCon
         fullText,
         toolCalls,
         toolResults,
+        effort: currentEffort,
+        hasThinking,
       })
     } else {
       // User message — only include if it has meaningful text content
       const ue = item.entry
       const content = ue.message.content
+
+      // Track effort level changes from /effort commands
+      if (typeof content === 'string') {
+        const effortMatch = content.match(/<command-name>\/effort<\/command-name>\s*<command-message>[^<]*<\/command-message>\s*<command-args>([^<]*)<\/command-args>/)
+        if (effortMatch && effortMatch[1].trim()) {
+          currentEffort = effortMatch[1].trim()
+          continue
+        }
+        // Also detect effort from local-command-stdout confirmations
+        const stdoutMatch = content.match(/<local-command-stdout>Set effort level to (\w+)/)
+        if (stdoutMatch) {
+          currentEffort = stdoutMatch[1]
+          continue
+        }
+      }
 
       // Skip array content that's only tool_result blocks
       if (Array.isArray(content)) {
@@ -294,6 +346,8 @@ export function parseJsonlContent(content: string, sessionId: string): ParsedCon
         fullText,
         toolCalls: [],
         toolResults: [],
+        effort: currentEffort,
+        hasThinking: false,
       })
     }
   }
@@ -377,9 +431,12 @@ export function discoverSessionFiles(dirs: string[]): SessionFile[] {
 /**
  * Parse a single session file and its sub-agents into a ParsedSession.
  */
-export function parseSessionFile(file: SessionFile): ParsedSession {
+export function parseSessionFile(file: SessionFile, initialEffort?: string | null): ParsedSession {
   const content = fs.readFileSync(file.jsonlPath, 'utf-8')
-  const parsed = parseJsonlContent(content, file.sessionId)
+  const parsed = parseJsonlContent(content, file.sessionId, initialEffort)
+
+  // Collect main session message UUIDs for dedup against sub-agents
+  const mainUuids = new Set(parsed.messages.map(m => m.uuid))
 
   // Parse sub-agents
   const subAgents: ParsedSubAgent[] = []
@@ -387,6 +444,10 @@ export function parseSessionFile(file: SessionFile): ParsedSession {
   for (const sa of file.subAgentFiles) {
     const saContent = fs.readFileSync(sa.jsonlPath, 'utf-8')
     const saParsed = parseJsonlContent(saContent, sa.subAgentId)
+
+    // Filter out messages that already exist in the main session (e.g. aside_question mirrors)
+    const uniqueMessages = saParsed.messages.filter(m => !mainUuids.has(m.uuid))
+    if (uniqueMessages.length === 0) continue
 
     let agentType: string | null = null
     if (sa.metaJsonPath) {
@@ -402,7 +463,7 @@ export function parseSessionFile(file: SessionFile): ParsedSession {
       id: sa.subAgentId,
       parentSessionId: file.sessionId,
       agentType,
-      messages: saParsed.messages,
+      messages: uniqueMessages,
     })
   }
 

@@ -187,6 +187,30 @@ tr:hover { background: var(--surface); }
 
 .user-row { opacity: 0.5; }
 
+/* Effort badge & thinking indicator */
+.effort-badge {
+  display: inline-block;
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--yellow);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  margin-left: 5px;
+  vertical-align: middle;
+  font-weight: 600;
+}
+.thinking-indicator {
+  display: inline-block;
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  margin-left: 3px;
+  vertical-align: middle;
+  font-weight: 600;
+}
+
 /* Expandable messages */
 .expandable-row { cursor: pointer; }
 .expandable-row:hover { background: rgba(88, 166, 255, 0.05); }
@@ -204,6 +228,24 @@ tr:hover { background: var(--surface); }
   border: 1px solid var(--border);
 }
 
+.expanded-text-wrapper { position: relative; }
+.copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.expanded-text-wrapper:hover .copy-btn { opacity: 1; }
+.copy-btn:hover { color: var(--text); border-color: var(--accent); }
 .expanded-content { display: flex; flex-direction: column; gap: 8px; }
 .expanded-tools { display: flex; flex-direction: column; gap: 6px; }
 .expanded-tool-result { border-left: 2px solid var(--border); padding-left: 8px; }

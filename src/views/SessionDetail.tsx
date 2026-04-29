@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import type { Session, SubAgent, Message } from '../lib/types'
 import { navigate } from '../lib/router'
 import { formatDuration, formatTokens, formatCost, formatCostShort, shortenPath } from '../lib/format'
-import { analyzeCacheCost } from '../lib/pricing'
+import { analyzeCacheCost, getPricing } from '../lib/pricing'
 
 interface Props {
   session: Session
@@ -78,6 +78,22 @@ function buildAgentOrdinalMap(messages: Message[], subAgents: SubAgent[]): Map<s
   }
 
   return map
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [text])
+  return (
+    <button className="copy-btn" onClick={handleCopy} title="Copy to clipboard">
+      {copied ? 'Copied!' : 'Copy'}
+    </button>
+  )
 }
 
 interface MessageTableProps {
@@ -200,8 +216,8 @@ function MessageTable({ messages, convertCurrency, currencySymbol, show5mCache, 
           const isUser = msg.role === 'user'
           const isExpensive = !isUser && costThreshold != null && convertCurrency(msg.costUSD) > costThreshold
           const isExpanded = expandedMessages.has(msg.uuid)
-          const hasFullText = (msg.fullText && msg.fullText.length > msg.preview.length) ||
-            msg.toolResults.some(tr => tr.fullResult && tr.fullResult.length > 80)
+          const hasFullText = (msg.fullText && msg.fullText.length > 0) ||
+            msg.toolResults.some(tr => tr.fullResult && tr.fullResult.length > 0)
           return (
             <tr
               key={msg.uuid || `msg-${idx}`}
@@ -211,11 +227,20 @@ function MessageTable({ messages, convertCurrency, currencySymbol, show5mCache, 
             >
               <td className="muted">{origIdx + 1}</td>
               <td className="muted">{formatTime(msg.timestamp)}</td>
-              <td>{msg.role}</td>
+              <td>
+                {msg.role}
+                {!isUser && msg.effort && <span className="effort-badge" title={`Effort: ${msg.effort}`}>{msg.effort}</span>}
+                {!isUser && msg.hasThinking && <span className="thinking-indicator" title="Extended thinking used">T</span>}
+              </td>
               <td title={isExpanded ? undefined : msg.preview} style={{ maxWidth: '400px' }}>
                 {isExpanded ? (
                   <div className="expanded-content">
-                    {msg.fullText && <div className="expanded-text">{msg.fullText}</div>}
+                    {msg.fullText && (
+                      <div className="expanded-text-wrapper">
+                        <CopyButton text={msg.fullText} />
+                        <div className="expanded-text">{msg.fullText}</div>
+                      </div>
+                    )}
                     {msg.toolResults.length > 0 && (
                       <div className="expanded-tools">
                         {msg.toolResults.map((tr, tri) => (
@@ -225,7 +250,12 @@ function MessageTable({ messages, convertCurrency, currencySymbol, show5mCache, 
                               {tr.isError && <span style={{ color: 'var(--red)', marginLeft: 4 }}>ERROR</span>}
                               {tr.toolInput && <span className="expanded-tool-input">{tr.toolInput}</span>}
                             </div>
-                            {tr.fullResult && <pre className="expanded-text">{tr.fullResult}</pre>}
+                            {tr.fullResult && (
+                              <div className="expanded-text-wrapper">
+                                <CopyButton text={tr.fullResult} />
+                                <pre className="expanded-text">{tr.fullResult}</pre>
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -397,6 +427,295 @@ export function SessionDetail({ session, onBack, convertCurrency, currencySymbol
     a.href = url
     const dateStr = new Date(session.startTime).toISOString().slice(0, 10)
     a.download = `session-${session.id.slice(0, 8)}-${dateStr}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleExportMarkdown() {
+    const FIVE_MIN_MS = 5 * 60 * 1000
+    const lines: string[] = []
+    const cc = (usd: number) => convertCurrency(usd)
+    const sym = currencySymbol
+    const fmtCost = (n: number) => `${sym}${n.toFixed(2)}`
+
+    // Compute agent work time vs total duration
+    const allMsgs = session.messages
+    let agentTimeMs = 0
+    for (let i = 0; i < allMsgs.length; i++) {
+      if (allMsgs[i].role === 'assistant') {
+        // Find the preceding user message
+        let userTs: number | null = null
+        for (let j = i - 1; j >= 0; j--) {
+          if (allMsgs[j].role === 'user') {
+            userTs = new Date(allMsgs[j].timestamp).getTime()
+            break
+          }
+        }
+        if (userTs !== null) {
+          agentTimeMs += new Date(allMsgs[i].timestamp).getTime() - userTs
+        }
+      }
+    }
+
+    // Effort levels used
+    const efforts = new Set(allMsgs.filter(m => m.role === 'assistant' && m.effort).map(m => m.effort!))
+    const effortStr = efforts.size > 0 ? [...efforts].join(', ') : 'default'
+
+    // Header
+    lines.push('# Session Export')
+    lines.push('')
+    lines.push(`**Model:** ${modelDisplay}`)
+    lines.push(`**Effort Level:** ${effortStr}`)
+    lines.push(`**Agent Work Time:** ${formatDuration(agentTimeMs)}`)
+    lines.push(`**Session Timeframe:** ${new Date(session.startTime).toLocaleString()} - ${new Date(session.endTime).toLocaleString()}`)
+    lines.push(`**Total Duration:** ${formatDuration(session.duration)}`)
+    lines.push(`**Total Cost:** ${fmtCost(cc(session.totalCostUSD))}`)
+    if (hasAgents) {
+      lines.push(`**Main Cost:** ${fmtCost(cc(mainCostUSD))} | **Agent Cost:** ${fmtCost(cc(agentCostUSD))}`)
+    }
+    lines.push(`**Working Dir:** ${session.cwd}`)
+    if (session.gitBranch) lines.push(`**Git Branch:** ${session.gitBranch}`)
+    if (session.version) lines.push(`**Version:** ${session.version}`)
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+    lines.push('## Conversation')
+    lines.push('')
+
+    // Group messages into exchanges: user prompt → assistant actions → final output
+    interface Exchange {
+      user: Message | null
+      assistantMsgs: Message[]
+    }
+
+    function buildExchanges(msgs: Message[]): Exchange[] {
+      const exchanges: Exchange[] = []
+      let current: Exchange = { user: null, assistantMsgs: [] }
+
+      for (const msg of msgs) {
+        if (msg.role === 'user') {
+          if (current.user !== null || current.assistantMsgs.length > 0) {
+            exchanges.push(current)
+          }
+          current = { user: msg, assistantMsgs: [] }
+        } else {
+          current.assistantMsgs.push(msg)
+        }
+      }
+      if (current.user !== null || current.assistantMsgs.length > 0) {
+        exchanges.push(current)
+      }
+      return exchanges
+    }
+
+    // Build map from sub-agent ID → SubAgent for inline rendering
+    const subAgentMap = new Map<string, SubAgent>()
+    for (const sa of session.subAgents) {
+      subAgentMap.set(sa.id, sa)
+    }
+
+    // Build ordinal map to match Agent tool calls to sub-agents (same logic as UI)
+    const agentOrdinalMap = buildAgentOrdinalMap(allMsgs, session.subAgents)
+
+    function renderSubAgentInline(sa: SubAgent) {
+      const saExchanges = buildExchanges(sa.messages)
+      const saLabel = sa.agentType || sa.id.slice(0, 8)
+
+      // Collect all tool calls across all sub-agent messages
+      const saTools: Array<{ name: string; toolInput: string; preview: string; isError: boolean }> = []
+      for (const m of sa.messages) {
+        if (m.role === 'assistant') {
+          for (const tr of m.toolResults) {
+            saTools.push({ name: tr.name, toolInput: tr.toolInput, preview: tr.preview, isError: tr.isError })
+          }
+        }
+      }
+
+      // Get the sub-agent's final output (last non-empty assistant text)
+      let saFinalText = ''
+      for (let i = sa.messages.length - 1; i >= 0; i--) {
+        if (sa.messages[i].role === 'assistant') {
+          const t = sa.messages[i].fullText || sa.messages[i].preview || ''
+          if (t.trim()) { saFinalText = t; break }
+        }
+      }
+
+      lines.push(`<details>`)
+      lines.push(`<summary><strong>Sub-agent: ${saLabel}</strong> — ${fmtCost(cc(sa.totalCostUSD))} | ${saExchanges.length} exchange${saExchanges.length !== 1 ? 's' : ''} | ${saTools.length} tool calls</summary>`)
+      lines.push('')
+
+      if (saTools.length > 0) {
+        const toolNames = saTools.map(t => t.name).join(', ')
+        lines.push(`**Tool calls (${saTools.length}):** ${toolNames}`)
+        lines.push('')
+        for (const tr of saTools) {
+          const errorTag = tr.isError ? ' **ERROR**' : ''
+          lines.push(`- **${tr.name}**${errorTag}`)
+          if (tr.toolInput) lines.push(`  - Input: \`${tr.toolInput.slice(0, 200)}${tr.toolInput.length > 200 ? '...' : ''}\``)
+          if (tr.preview) lines.push(`  - Result: \`${tr.preview}\``)
+        }
+        lines.push('')
+      }
+
+      if (saFinalText) {
+        lines.push(`**Sub-agent output:**`)
+        lines.push('')
+        lines.push(saFinalText)
+        lines.push('')
+      }
+
+      lines.push(`</details>`)
+      lines.push('')
+    }
+
+    const exchanges = buildExchanges(allMsgs)
+    let lastExchangeEndTs: number | null = null
+    let num = 0
+
+    for (const ex of exchanges) {
+      num++
+
+      // Costs across the whole exchange
+      const allAsst = ex.assistantMsgs
+      const exchangeCost = allAsst.reduce((s, m) => s + m.costUSD, 0)
+      const lastAsst = allAsst[allAsst.length - 1]
+      const cumCost = lastAsst?.cumulativeCostUSD ?? (ex.user?.cumulativeCostUSD ?? 0)
+
+      // Find sub-agents spawned in this exchange and add their cost
+      const exchangeAgentIds: string[] = []
+      for (const m of allAsst) {
+        const mi = allMsgs.indexOf(m)
+        for (let ti = 0; ti < m.toolCalls.length; ti++) {
+          if (m.toolCalls[ti] === 'Agent') {
+            const saId = agentOrdinalMap.get(`${mi}-${ti}`)
+            if (saId) exchangeAgentIds.push(saId)
+          }
+        }
+      }
+      let agentCostForExchange = 0
+      for (const saId of exchangeAgentIds) {
+        const sa = subAgentMap.get(saId)
+        if (sa) agentCostForExchange += sa.totalCostUSD
+      }
+      const totalExchangeCost = exchangeCost + agentCostForExchange
+
+      // Timestamps
+      const startMsg = ex.user ?? allAsst[0]
+      const startTs = startMsg ? new Date(startMsg.timestamp).getTime() : 0
+      const startTime = startMsg
+        ? new Date(startMsg.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : ''
+
+      // Cache write detection + estimated cache write cost
+      const isCacheWrite = ex.user && lastExchangeEndTs !== null && (startTs - lastExchangeEndTs) > FIVE_MIN_MS
+      let cacheFlag = ''
+      if (isCacheWrite && allAsst.length > 0) {
+        const firstAsst = allAsst[0]
+        const totalInput = firstAsst.inputTokens + firstAsst.cacheReadTokens +
+          firstAsst.cacheCreation5mTokens + firstAsst.cacheCreation1hTokens
+        const pricing = getPricing(firstAsst.model, firstAsst.timestamp, totalInput)
+        let cacheWriteCost = 0
+        if (pricing) {
+          cacheWriteCost = (firstAsst.cacheCreation5mTokens * pricing.cacheWrite5m / 1_000_000) +
+            (firstAsst.cacheCreation1hTokens * pricing.cacheWrite1h / 1_000_000)
+        }
+        const costStr = cacheWriteCost > 0 ? `, est. ${fmtCost(cc(cacheWriteCost))} write cost` : ''
+        cacheFlag = ` | **Cache Write** (${formatDuration(startTs - lastExchangeEndTs!)} gap${costStr})`
+      }
+
+      const costDisplay = agentCostForExchange > 0
+        ? `${fmtCost(cc(totalExchangeCost))} (main: ${fmtCost(cc(exchangeCost))}, agents: ${fmtCost(cc(agentCostForExchange))})`
+        : fmtCost(cc(exchangeCost))
+
+      lines.push(`### #${num} [${startTime}] — Cost: ${costDisplay} | Cumulative: ${fmtCost(cc(cumCost))}${cacheFlag}`)
+      lines.push('')
+
+      // 1. User prompt (collapsible)
+      if (ex.user) {
+        const userText = ex.user.fullText || ex.user.preview || ''
+        if (userText) {
+          const isCompact = /^This session is being continued from a previous conversation/i.test(userText.trim())
+          if (isCompact) {
+            lines.push(`**Prompt:** \`/compact\``)
+            lines.push('')
+            lines.push(`<details>`)
+            lines.push(`<summary>System compaction prompt</summary>`)
+            lines.push('')
+            lines.push(userText)
+            lines.push('')
+            lines.push(`</details>`)
+            lines.push('')
+          } else {
+            const preview = userText.split('\n')[0].slice(0, 100)
+            lines.push(`<details>`)
+            lines.push(`<summary><strong>Prompt:</strong> ${preview}${userText.length > 100 ? '...' : ''}</summary>`)
+            lines.push('')
+            for (const l of userText.split('\n')) {
+              lines.push(`> ${l}`)
+            }
+            lines.push('')
+            lines.push(`</details>`)
+            lines.push('')
+          }
+        }
+      }
+
+      // 2. Agent actions — all tool calls across all assistant messages in this exchange (collapsible)
+      const allTools: Array<{ name: string; toolInput: string; preview: string; isError: boolean }> = []
+      for (const m of allAsst) {
+        for (const tr of m.toolResults) {
+          allTools.push({ name: tr.name, toolInput: tr.toolInput, preview: tr.preview, isError: tr.isError })
+        }
+      }
+      if (allTools.length > 0) {
+        const toolNames = allTools.map(t => t.name).join(', ')
+        lines.push(`<details>`)
+        lines.push(`<summary><strong>Agent Actions (${allTools.length}):</strong> ${toolNames}</summary>`)
+        lines.push('')
+        for (const tr of allTools) {
+          const errorTag = tr.isError ? ' **ERROR**' : ''
+          lines.push(`- **${tr.name}**${errorTag}`)
+          if (tr.toolInput) lines.push(`  - Input: \`${tr.toolInput.slice(0, 200)}${tr.toolInput.length > 200 ? '...' : ''}\``)
+          if (tr.preview) lines.push(`  - Result: \`${tr.preview}\``)
+        }
+        lines.push('')
+        lines.push(`</details>`)
+        lines.push('')
+      }
+
+      // 3. Sub-agents spawned in this exchange (inline, collapsible)
+      for (const saId of exchangeAgentIds) {
+        const sa = subAgentMap.get(saId)
+        if (sa) renderSubAgentInline(sa)
+      }
+
+      // 4. Final output — text from the last assistant message that has text (collapsible)
+      let finalText = ''
+      for (let i = allAsst.length - 1; i >= 0; i--) {
+        const t = allAsst[i].fullText || allAsst[i].preview || ''
+        if (t.trim()) { finalText = t; break }
+      }
+      if (finalText) {
+        const preview = finalText.split('\n')[0].slice(0, 100)
+        lines.push(`<details>`)
+        lines.push(`<summary><strong>Output:</strong> ${preview}${finalText.length > 100 ? '...' : ''}</summary>`)
+        lines.push('')
+        lines.push(finalText)
+        lines.push('')
+        lines.push(`</details>`)
+        lines.push('')
+      }
+
+      if (lastAsst) lastExchangeEndTs = new Date(lastAsst.timestamp).getTime()
+    }
+
+    const md = lines.join('\n')
+    const blob = new Blob([md], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const dateStr = new Date(session.startTime).toISOString().slice(0, 10)
+    a.download = `session-${session.id.slice(0, 8)}-${dateStr}.md`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -577,7 +896,8 @@ export function SessionDetail({ session, onBack, convertCurrency, currencySymbol
         </label>
         <div style={{ marginLeft: 'auto' }}>
           <div className="export-buttons">
-            <button onClick={handleExportSession}>Export Session</button>
+            <button onClick={handleExportSession}>Export JSON</button>
+            <button onClick={handleExportMarkdown}>Export Markdown</button>
           </div>
         </div>
       </div>
